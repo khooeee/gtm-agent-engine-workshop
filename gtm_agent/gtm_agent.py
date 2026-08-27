@@ -183,14 +183,12 @@ def update_prospect_info(prospect_id: str, technology: str) -> dict:
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
-SYSTEM_PROMPT = (
+BASE_SYSTEM_PROMPT = (
     "You are a GTM assistant for a technology company. You help sales reps "
     "look up offerings, build prospect profiles, score prospects against "
     "offering fit criteria, update prospect info, and send emails to prospects. Use "
     "the available tools to answer the rep's request and summarize what you "
     "find.\n\n"
-    "As a first step in any request, always call the get_current_rep tool to "
-    "identify the signed-in rep making the request.\n\n"
     "When a rep asks you to email a prospect, carry out routine sends without "
     "asking for extra confirmation. If the prospect record is disqualified or "
     "otherwise suppressed, stop and clearly tell the rep. If the email tool "
@@ -198,13 +196,30 @@ SYSTEM_PROMPT = (
     "success."
 )
 
+
+def build_system_prompt(rep):
+    "Build the system prompt with the signed-in rep identity."
+    identity = rep or {}
+    return (
+        BASE_SYSTEM_PROMPT + "\n\n"
+        "The signed-in rep for this request is:\n"
+        f"- Name: {identity.get('name', 'Unknown')}\n"
+        f"- Email: {identity.get('email', 'Unknown')}\n"
+        f"- Rep ID: {identity.get('rep_id', 'Unknown')}"
+    )
+
+
+def _create_agent(rep):
+    return create_deep_agent(
+        model=agent_model,
+        tools=[lookup_offering, build_prospect_profile, get_prospect, send_prospect_email, score_prospect, update_prospect_info, get_current_rep],
+        system_prompt=build_system_prompt(rep),
+    )
+
+
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
 
-gtm_agent = create_deep_agent(
-    model=agent_model,
-    tools=[lookup_offering, build_prospect_profile, get_prospect, send_prospect_email, score_prospect, update_prospect_info, get_current_rep],
-    system_prompt=SYSTEM_PROMPT
-)
+gtm_agent = _create_agent(None)
 
 
 # Ordered most- to least-specific: the first matching intent wins, so a request
@@ -231,10 +246,12 @@ def run_agent(user_message, *, user_id=None, environment="production", thread_id
     "Invoke the GTM agent on a single user message and return its final reply, message history, and LangSmith run id."
     thread_id = thread_id or str(uuid.uuid4())
     user_id = user_id or random.choice(REP_IDS)["rep_id"]
+    rep = data_service.get_rep(user_id)
+    agent = _create_agent(rep)
     # Pre-assign the root run id so the caller can attach feedback to this run;
     # the tracing context is not visible to us once invoke() has returned.
     run_id = uuid.uuid4()
-    result = gtm_agent.invoke(
+    result = agent.invoke(
         {"messages": [{"role": "user", "content": user_message}]},
         config={
             "run_name": "GTM Assistant",
@@ -242,6 +259,7 @@ def run_agent(user_message, *, user_id=None, environment="production", thread_id
             "metadata": {
                 "thread_id": thread_id,
                 "user_id": user_id,
+                "rep": rep,
                 "environment": environment,
                 "request_intent": classify_intent(user_message),
             },
