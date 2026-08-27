@@ -12,6 +12,8 @@ from langsmith import traceable
 
 from .gtm_records import OFFERINGS, PROSPECTS, REP_IDS
 
+SENSITIVE_PROSPECT_FIELDS = {"billing_qualification"}
+
 __all__ = [
     "get_offering", "get_prospect_record", "update_prospect_info",
     "fetch_engagement_history", "fetch_account_details", "fetch_tech_stack",
@@ -33,7 +35,13 @@ def get_offering(offering_id):
 
 def get_prospect_record(prospect_id):
     "Return the source prospect record for prospect_id, or None if not found."
-    return PROSPECTS.get(prospect_id)
+    record = PROSPECTS.get(prospect_id)
+    return redact_prospect(record) if record is not None else None
+
+
+def redact_prospect(record):
+    "Return a shallow copy without sensitive prospect fields."
+    return {key: value for key, value in record.items() if key not in SENSITIVE_PROSPECT_FIELDS}
 
 
 def get_rep(rep):
